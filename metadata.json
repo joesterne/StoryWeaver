@@ -1,0 +1,6 @@
+{
+  "name": "StoryWeaver",
+  "description": "Creative writing interface that analyzes an uploaded image and ghostwrites the opening paragraph of a story. Includes read-aloud TTS and a dark mode toggle.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
