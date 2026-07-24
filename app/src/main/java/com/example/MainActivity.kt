@@ -17,12 +17,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -57,10 +62,11 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
             val db = remember { AppDatabase.getDatabase(context) }
             val repository = remember { StoryRepository(db.storyDao()) }
+            val characterRepository = remember { com.example.data.CharacterRepository(db.characterDao()) }
             val viewModel: StoryViewModel = viewModel(
                 factory = object : ViewModelProvider.Factory {
                     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                        return StoryViewModel(repository) as T
+                        return StoryViewModel(repository, characterRepository) as T
                     }
                 }
             )
@@ -93,11 +99,24 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text("StoryWeaver", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) 
-                },
-                actions = {
+            if (!uiState.isFocusMode) {
+                TopAppBar(
+                    title = { 
+                        Text("StoryWeaver", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold) 
+                    },
+                    actions = {
+                        IconButton(onClick = { viewModel.toggleFocusMode() }) {
+                            Icon(
+                                imageVector = Icons.Default.Fullscreen,
+                                contentDescription = "Focus Mode"
+                            )
+                        }
+                        IconButton(onClick = { viewModel.toggleCharactersPanel() }) {
+                        Icon(
+                            imageVector = Icons.Default.Face,
+                            contentDescription = "Characters"
+                        )
+                    }
                     IconButton(onClick = { viewModel.toggleHistory() }) {
                         Icon(
                             imageVector = Icons.Default.History,
@@ -116,9 +135,10 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                     titleContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
+            }
         },
         bottomBar = {
-            if (uiState.storyText != null) {
+            if (!uiState.isFocusMode && uiState.storyText != null) {
                 ChatInputBar(
                     isLoading = uiState.isChatLoading,
                     onSend = { text ->
@@ -129,9 +149,24 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                     }
                 )
             }
+        },
+        floatingActionButton = {
+            if (uiState.isFocusMode) {
+                FloatingActionButton(
+                    onClick = { viewModel.toggleFocusMode() },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FullscreenExit,
+                        contentDescription = "Exit Focus Mode"
+                    )
+                }
+            }
         }
     ) { paddingValues ->
-        if (uiState.showHistory) {
+        if (uiState.showCharactersPanel) {
+            CharactersScreen(viewModel = viewModel, modifier = Modifier.padding(paddingValues))
+        } else if (uiState.showHistory) {
             HistoryScreen(viewModel = viewModel, modifier = Modifier.padding(paddingValues))
         } else {
             LazyColumn(
@@ -145,7 +180,7 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                 item { Spacer(modifier = Modifier.height(8.dp)) }
             
             // Tone Selection
-            if (uiState.imageUri == null) {
+            if (!uiState.isFocusMode && uiState.imageUri == null) {
                 item {
                     val tones = listOf("Suspenseful", "Whimsical", "Dark", "Romantic")
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -171,6 +206,7 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
             }
 
             // Image Section
+            if (!uiState.isFocusMode) {
             item {
                 if (uiState.imageUri != null) {
                     AsyncImage(
@@ -200,6 +236,47 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                             Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(48.dp))
                             Spacer(modifier = Modifier.height(16.dp))
                             Text("Upload Inspiration Image", fontFamily = FontFamily.Serif)
+                        }
+                    }
+                }
+            }
+            }
+
+            // Writing Prompts Section
+            if (uiState.imageUri == null && uiState.storyText == null && !uiState.isLoading) {
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Or jumpstart your imagination...",
+                                fontFamily = FontFamily.Serif,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(onClick = { viewModel.refreshPrompts() }) {
+                                Text("Refresh")
+                            }
+                        }
+                        
+                        uiState.randomPrompts.forEach { prompt ->
+                            Card(
+                                onClick = { viewModel.onPromptSelected(prompt) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            ) {
+                                Text(
+                                    text = prompt,
+                                    modifier = Modifier.padding(16.dp),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
                         }
                     }
                 }
@@ -247,6 +324,7 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                             )
                         )
                         
+                        if (!uiState.isFocusMode) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -255,7 +333,7 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 val wordCount = uiState.storyText.trim().split("\\s+".toRegex()).count { it.isNotBlank() }
                                 Text(
-                                    text = "$wordCount words",
+                                    text = "$wordCount words" + if (uiState.isSaving) " • Saving..." else " • Saved",
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -350,6 +428,15 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                             modifier = Modifier.padding(vertical = 32.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant
                         )
+                        } else {
+                            val wordCount = uiState.storyText.trim().split("\\s+".toRegex()).count { it.isNotBlank() }
+                            Text(
+                                text = "$wordCount words" + if (uiState.isSaving) " • Saving..." else " • Saved",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -377,6 +464,18 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
 @Composable
 fun HistoryScreen(viewModel: StoryViewModel, modifier: Modifier = Modifier) {
     val savedStories by viewModel.savedStories.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+
+    val filteredStories = savedStories.filter { story ->
+        val matchesSearch = if (uiState.searchQuery.isNotBlank()) {
+            story.title.contains(uiState.searchQuery, ignoreCase = true) ||
+            story.text.contains(uiState.searchQuery, ignoreCase = true)
+        } else true
+        val matchesTone = if (uiState.filterTone != "All") {
+            story.tone.equals(uiState.filterTone, ignoreCase = true)
+        } else true
+        matchesSearch && matchesTone
+    }
 
     LazyColumn(
         modifier = modifier
@@ -390,21 +489,50 @@ fun HistoryScreen(viewModel: StoryViewModel, modifier: Modifier = Modifier) {
                 fontFamily = FontFamily.Serif,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(vertical = 16.dp),
+                modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
                 color = MaterialTheme.colorScheme.onBackground
             )
         }
 
-        if (savedStories.isEmpty()) {
+        item {
+            OutlinedTextField(
+                value = uiState.searchQuery,
+                onValueChange = { viewModel.updateSearchQuery(it) },
+                placeholder = { Text("Search stories...") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") }
+            )
+        }
+
+        item {
+            val tones = listOf("All", "Suspenseful", "Whimsical", "Dark", "Romantic")
+            androidx.compose.foundation.lazy.LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(tones) { tone ->
+                    FilterChip(
+                        selected = uiState.filterTone == tone,
+                        onClick = { viewModel.updateFilterTone(tone) },
+                        label = { Text(tone) }
+                    )
+                }
+            }
+        }
+
+        if (filteredStories.isEmpty()) {
             item {
                 Text(
-                    text = "No saved stories yet.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = if (savedStories.isEmpty()) "No saved stories yet." else "No stories match your search.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 16.dp)
                 )
             }
         }
 
-        items(savedStories) { story ->
+        items(filteredStories) { story ->
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 onClick = { viewModel.loadStory(story) },
@@ -413,11 +541,20 @@ fun HistoryScreen(viewModel: StoryViewModel, modifier: Modifier = Modifier) {
                 )
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = if (story.title.isNotBlank()) story.title else "Untitled",
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    
                     val previewText = if (story.text.length > 100) story.text.substring(0, 100) + "..." else story.text
                     Text(
                         text = previewText,
                         fontFamily = FontFamily.Serif,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
@@ -425,12 +562,28 @@ fun HistoryScreen(viewModel: StoryViewModel, modifier: Modifier = Modifier) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val date = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(story.timestamp))
-                        Text(
-                            text = date,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val date = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(story.timestamp))
+                            Text(
+                                text = date,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                            if (story.tone.isNotBlank()) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = story.tone,
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
                         IconButton(
                             onClick = { viewModel.deleteStory(story.id) },
                             modifier = Modifier.size(24.dp)
@@ -538,6 +691,153 @@ fun ChatInputBar(
                     tint = MaterialTheme.colorScheme.onPrimary
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CharactersScreen(viewModel: StoryViewModel, modifier: Modifier = Modifier) {
+    val characters by viewModel.characters.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    if (showAddDialog) {
+        var name by remember { mutableStateOf("") }
+        var traits by remember { mutableStateOf("") }
+        var description by remember { mutableStateOf("") }
+        
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("Add Character") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = traits,
+                        onValueChange = { traits = it },
+                        label = { Text("Traits (e.g., brave, cunning)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("Physical Description") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (name.isNotBlank()) {
+                            viewModel.saveCharacter(name, traits, description)
+                            showAddDialog = false
+                        }
+                    }
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 80.dp)
+        ) {
+            item {
+                Text(
+                    text = "Character Profiles",
+                    fontFamily = FontFamily.Serif,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Select characters to include them in the context for story generation.",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (characters.isEmpty()) {
+                item {
+                    Text(
+                        text = "No characters added yet.",
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            items(characters) { character ->
+                val isSelected = uiState.selectedCharacters.any { it.id == character.id }
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    onClick = { viewModel.toggleCharacterSelection(character) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = character.name,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (character.traits.isNotBlank()) {
+                                Text(
+                                    text = "Traits: ${character.traits}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                            if (character.physicalDescription.isNotBlank()) {
+                                Text(
+                                    text = "Description: ${character.physicalDescription}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = { viewModel.deleteCharacter(character.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete Character")
+                        }
+                    }
+                }
+            }
+        }
+
+        FloatingActionButton(
+            onClick = { showAddDialog = true },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        ) {
+            Icon(Icons.Default.Add, contentDescription = "Add Character")
         }
     }
 }
