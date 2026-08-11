@@ -1,6 +1,6 @@
 {
   "name": "StoryWeaver",
-  "description": "Creative writing interface that analyzes an uploaded image and ghostwrites the opening paragraph of a story. Includes read-aloud TTS and a dark mode toggle.",
+  "description": "Creative writing application powered by Gemini. Features include ghostwriting from images and text prompts, character profile management, story generation context, tone selection, focus mode, and generative audio.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
