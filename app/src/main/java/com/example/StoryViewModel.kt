@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -616,18 +618,20 @@ class StoryViewModel(
         }
     }
 
-    private fun uriToBase64(context: Context, uri: Uri): String? {
-        return try {
+    private suspend fun uriToBase64(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
+        try {
             val inputStream = context.contentResolver.openInputStream(uri)
             val bitmap = BitmapFactory.decodeStream(inputStream)
             inputStream?.close()
             
             val maxDim = 1024
-            val scaledBitmap = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+            val scaledBitmap = if (bitmap != null && (bitmap.width > maxDim || bitmap.height > maxDim)) {
                 val ratio = minOf(maxDim.toFloat() / bitmap.width, maxDim.toFloat() / bitmap.height)
                 Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
-            } else {
+            } else if (bitmap != null) {
                 bitmap
+            } else {
+                return@withContext null
             }
 
             val outputStream = ByteArrayOutputStream()

@@ -54,6 +54,21 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private fun countWordsFast(text: String?): Int {
+    if (text.isNullOrBlank()) return 0
+    var count = 0
+    var isWord = false
+    for (i in text.indices) {
+        if (text[i].isWhitespace()) {
+            isWord = false
+        } else if (!isWord) {
+            isWord = true
+            count++
+        }
+    }
+    return count
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -331,7 +346,7 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                val wordCount = uiState.storyText.trim().split("\\s+".toRegex()).count { it.isNotBlank() }
+                                val wordCount = countWordsFast(uiState.storyText)
                                 Text(
                                     text = "$wordCount words" + if (uiState.isSaving) " • Saving..." else " • Saved",
                                     fontSize = 12.sp,
@@ -429,7 +444,7 @@ fun StoryWeaverApp(viewModel: StoryViewModel, uiState: StoryUiState) {
                             color = MaterialTheme.colorScheme.surfaceVariant
                         )
                         } else {
-                            val wordCount = uiState.storyText.trim().split("\\s+".toRegex()).count { it.isNotBlank() }
+                            val wordCount = countWordsFast(uiState.storyText)
                             Text(
                                 text = "$wordCount words" + if (uiState.isSaving) " • Saving..." else " • Saved",
                                 fontSize = 12.sp,
