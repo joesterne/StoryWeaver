@@ -28,6 +28,8 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.UUID
 import com.example.data.StoryEntity
 import com.example.data.StoryRepository
@@ -63,6 +65,8 @@ class StoryViewModel(
 
     private var mediaPlayer: MediaPlayer? = null
     private var musicPlayer: MediaPlayer? = null
+    private var currentAudioFile: File? = null
+    private var currentMusicFile: File? = null
     private val apiKey = BuildConfig.GEMINI_API_KEY
 
     // Chat history for Gemini
@@ -97,6 +101,7 @@ class StoryViewModel(
     }
 
     fun onPromptSelected(prompt: String) {
+        autoSaveJob?.cancel()
         currentStoryId = null
         textHistory.clear()
         historyIndex = -1
@@ -223,13 +228,20 @@ class StoryViewModel(
         updateUndoRedoState()
         
         autoSaveJob?.cancel()
+        // Capture the target story now: if the user switches stories during the debounce,
+        // this save must still land on the story it belongs to, not the newly opened one.
+        val storyIdAtLaunch = currentStoryId
+        val toneAtLaunch = _uiState.value.selectedTone
         autoSaveJob = viewModelScope.launch {
             delay(1000) // Debounce auto-save
             val allText = newText + if (currentMessages.size > 1) "\n\n" + currentMessages.drop(1).joinToString("\n\n") { it.text } else ""
             val titleLines = allText.lines().filter { it.isNotBlank() }
             val title = if (titleLines.isNotEmpty()) titleLines.first().take(50) else "Untitled"
-            currentStoryId = repository.insert(StoryEntity(id = currentStoryId ?: 0, text = allText, title = title, tone = _uiState.value.selectedTone)).toInt()
-            _uiState.value = _uiState.value.copy(isSaving = false)
+            val savedId = repository.insert(StoryEntity(id = storyIdAtLaunch ?: 0, text = allText, title = title, tone = toneAtLaunch)).toInt()
+            if (currentStoryId == storyIdAtLaunch) {
+                currentStoryId = savedId
+                _uiState.value = _uiState.value.copy(isSaving = false)
+            }
         }
     }
 
@@ -246,6 +258,7 @@ class StoryViewModel(
     }
 
     fun onImageSelected(context: Context, uri: Uri) {
+        autoSaveJob?.cancel()
         currentStoryId = null
         textHistory.clear()
         historyIndex = -1
@@ -361,9 +374,13 @@ class StoryViewModel(
                     val title = if (titleLines.isNotEmpty()) titleLines.first().take(50) else "Untitled"
                     currentStoryId = repository.insert(StoryEntity(id = currentStoryId ?: 0, text = allText, title = title, tone = _uiState.value.selectedTone)).toInt()
                 } else {
+                    // Roll the user turn back out: leaving it in history would put two
+                    // consecutive user contents in every later request and break chat for this story.
+                    chatHistory.remove(userContent)
                     _uiState.value = _uiState.value.copy(isChatLoading = false, error = "Failed to generate response")
                 }
             } catch (e: Exception) {
+                chatHistory.remove(userContent)
                 _uiState.value = _uiState.value.copy(isChatLoading = false, error = e.localizedMessage)
             }
         }
@@ -374,6 +391,7 @@ class StoryViewModel(
             stopAudio()
             return
         }
+        if (_uiState.value.isAudioLoading) return // a TTS request is already in flight
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isAudioLoading = true)
@@ -410,11 +428,36 @@ class StoryViewModel(
         }
     }
 
+    // Gemini TTS returns raw 16-bit PCM (audio/L16, 24 kHz mono) with no container header;
+    // MediaPlayer can't decode headerless PCM, so wrap it in a WAV header first.
+    private fun pcmToWav(pcm: ByteArray, sampleRate: Int = 24000, channels: Int = 1, bitsPerSample: Int = 16): ByteArray {
+        val byteRate = sampleRate * channels * bitsPerSample / 8
+        val blockAlign = channels * bitsPerSample / 8
+        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII))
+            putInt(36 + pcm.size)
+            put("WAVE".toByteArray(Charsets.US_ASCII))
+            put("fmt ".toByteArray(Charsets.US_ASCII))
+            putInt(16)
+            putShort(1) // PCM
+            putShort(channels.toShort())
+            putInt(sampleRate)
+            putInt(byteRate)
+            putShort(blockAlign.toShort())
+            putShort(bitsPerSample.toShort())
+            put("data".toByteArray(Charsets.US_ASCII))
+            putInt(pcm.size)
+        }
+        return header.array() + pcm
+    }
+
     private fun playAudio(context: Context, base64Audio: String) {
+        var tempFile: File? = null
         try {
             val audioBytes = Base64.decode(base64Audio, Base64.DEFAULT)
-            val tempFile = File(context.cacheDir, "story_audio_${UUID.randomUUID()}.mp3")
-            FileOutputStream(tempFile).use { it.write(audioBytes) }
+            tempFile = File(context.cacheDir, "story_audio_${UUID.randomUUID()}.wav")
+            FileOutputStream(tempFile).use { it.write(pcmToWav(audioBytes)) }
+            currentAudioFile = tempFile
 
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
@@ -426,10 +469,13 @@ class StoryViewModel(
                     it.release()
                     mediaPlayer = null
                     tempFile.delete()
+                    if (currentAudioFile == tempFile) currentAudioFile = null
                 }
             }
             _uiState.value = _uiState.value.copy(isAudioLoading = false, isPlayingAudio = true)
         } catch (e: Exception) {
+            tempFile?.delete()
+            if (currentAudioFile == tempFile) currentAudioFile = null
             _uiState.value = _uiState.value.copy(isAudioLoading = false, error = "Failed to play audio")
         }
     }
@@ -440,6 +486,8 @@ class StoryViewModel(
             it.release()
         }
         mediaPlayer = null
+        currentAudioFile?.delete()
+        currentAudioFile = null
         _uiState.value = _uiState.value.copy(isPlayingAudio = false)
     }
 
@@ -449,6 +497,8 @@ class StoryViewModel(
             it.release()
         }
         musicPlayer = null
+        currentMusicFile?.delete()
+        currentMusicFile = null
         _uiState.value = _uiState.value.copy(isPlayingMusic = false)
     }
 
@@ -463,6 +513,7 @@ class StoryViewModel(
             stopMusic()
             return
         }
+        if (_uiState.value.isMusicLoading) return // a music request is already in flight
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isMusicLoading = true, error = null)
@@ -495,10 +546,12 @@ class StoryViewModel(
     }
 
     private fun playMusic(context: Context, base64Audio: String) {
+        var tempFile: File? = null
         try {
             val audioBytes = Base64.decode(base64Audio, Base64.DEFAULT)
-            val tempFile = File(context.cacheDir, "story_music_${UUID.randomUUID()}.mp3")
+            tempFile = File(context.cacheDir, "story_music_${UUID.randomUUID()}.mp3")
             FileOutputStream(tempFile).use { it.write(audioBytes) }
+            currentMusicFile = tempFile
 
             musicPlayer?.release()
             musicPlayer = MediaPlayer().apply {
@@ -510,10 +563,13 @@ class StoryViewModel(
                     it.release()
                     musicPlayer = null
                     tempFile.delete()
+                    if (currentMusicFile == tempFile) currentMusicFile = null
                 }
             }
             _uiState.value = _uiState.value.copy(isMusicLoading = false, isPlayingMusic = true)
         } catch (e: Exception) {
+            tempFile?.delete()
+            if (currentMusicFile == tempFile) currentMusicFile = null
             _uiState.value = _uiState.value.copy(isMusicLoading = false, error = "Failed to play music")
         }
     }
@@ -566,11 +622,28 @@ class StoryViewModel(
     }
 
     fun loadStory(story: StoryEntity) {
+        autoSaveJob?.cancel()
         currentStoryId = story.id
         textHistory.clear()
         historyIndex = -1
         addToHistory(story.text)
-        
+
+        // Re-seed the chat context with the loaded story; without this the previous
+        // story's conversation silently grounds every continuation of this one.
+        chatHistory.clear()
+        chatHistory.add(
+            Content(
+                role = "user",
+                parts = listOf(Part(text = "Here is the story so far:\n\n${story.text}"))
+            )
+        )
+        chatHistory.add(
+            Content(
+                role = "model",
+                parts = listOf(Part(text = story.text))
+            )
+        )
+
         _uiState.value = _uiState.value.copy(
             showHistory = false,
             storyText = story.text,
@@ -583,6 +656,21 @@ class StoryViewModel(
     fun deleteStory(id: Int) {
         viewModelScope.launch {
             repository.deleteById(id)
+        }
+        if (id == currentStoryId) {
+            // The open story is gone; without this the next autosave would resurrect
+            // the deleted row via its REPLACE insert.
+            autoSaveJob?.cancel()
+            currentStoryId = null
+            textHistory.clear()
+            historyIndex = -1
+            chatHistory.clear()
+            _uiState.value = _uiState.value.copy(
+                storyText = null,
+                chatMessages = emptyList(),
+                canUndo = false,
+                canRedo = false
+            )
         }
     }
 
@@ -604,30 +692,43 @@ class StoryViewModel(
         } else {
             if (historyIndex >= 0) {
                 textHistory[historyIndex] = newText
+                // Drop the redo tail: after an undo plus a quick edit, Redo must not
+                // restore stale "future" text that no longer follows from this entry.
+                if (historyIndex < textHistory.size - 1) {
+                    textHistory.subList(historyIndex + 1, textHistory.size).clear()
+                }
+                updateUndoRedoState()
             }
         }
-        
+
         autoSaveJob?.cancel()
+        // Capture the target story now: if the user switches stories during the debounce,
+        // this save must still land on the story it was typed in, not the newly opened one.
+        val storyIdAtLaunch = currentStoryId
+        val toneAtLaunch = _uiState.value.selectedTone
         autoSaveJob = viewModelScope.launch {
             delay(1500) // Debounce auto-save while typing
             val allText = newText + if (currentMessages.size > 1) "\n\n" + currentMessages.drop(1).joinToString("\n\n") { it.text } else ""
             val titleLines = allText.lines().filter { it.isNotBlank() }
             val title = if (titleLines.isNotEmpty()) titleLines.first().take(50) else "Untitled"
-            currentStoryId = repository.insert(StoryEntity(id = currentStoryId ?: 0, text = allText, title = title, tone = _uiState.value.selectedTone)).toInt()
-            _uiState.value = _uiState.value.copy(isSaving = false)
+            val savedId = repository.insert(StoryEntity(id = storyIdAtLaunch ?: 0, text = allText, title = title, tone = toneAtLaunch)).toInt()
+            if (currentStoryId == storyIdAtLaunch) {
+                currentStoryId = savedId
+                _uiState.value = _uiState.value.copy(isSaving = false)
+            }
         }
     }
 
     private suspend fun uriToBase64(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
         try {
             val inputStream = context.contentResolver.openInputStream(uri)
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream?.close()
-            
+            val bitmap = inputStream?.use { BitmapFactory.decodeStream(it) }
+
             val maxDim = 1024
             val scaledBitmap = if (bitmap != null && (bitmap.width > maxDim || bitmap.height > maxDim)) {
                 val ratio = minOf(maxDim.toFloat() / bitmap.width, maxDim.toFloat() / bitmap.height)
-                Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+                // coerceAtLeast(1): extreme aspect ratios truncated a dimension to 0 and createScaledBitmap threw.
+                Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt().coerceAtLeast(1), (bitmap.height * ratio).toInt().coerceAtLeast(1), true)
             } else if (bitmap != null) {
                 bitmap
             } else {

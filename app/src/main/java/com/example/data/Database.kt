@@ -64,7 +64,10 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getDatabase(context: Context): AppDatabase {
             return Instance ?: synchronized(this) {
-                Room.databaseBuilder(context, AppDatabase::class.java, "story_database")
+                // applicationContext: the singleton must not retain an Activity.
+                Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "story_database")
+                    // WARNING: any future schema change silently wipes all saved stories
+                    // and characters until real Migrations are written.
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { Instance = it }
